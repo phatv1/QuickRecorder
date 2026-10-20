@@ -203,6 +203,10 @@ Permission checks are in `SCContext.swift`:
 
 ### Fragmented MP4 Protection (narrow scope after v1.7.4)
 
+> **Fork:** this fork turns fragments on (2 s) for every SDR writer, including audio, and keeps
+> them closing with a video heartbeat. Verified 2026-10-20; see `docs/FORK.md` → "Crash protection".
+> The text below describes upstream.
+
 `RecordEngine.swift` enables `movieFragmentInterval = 1.0s` on the main `AVAssetWriter`
 **only when neither `recordMic` nor `recordWinSound` is on AND `recordHDR == false`** —
 i.e. screen-only recording with no audio (the check is in `initVideo`). With fragmented MP4

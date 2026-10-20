@@ -203,7 +203,7 @@ class AppSelectorViewModel: ObservableObject {
 struct OptionsView: View {
     @State private var micList = SCContext.getMicrophone()
     
-    @AppStorage("frameRate")      private var frameRate: Int = 60
+    @AppStorage("frameRate")      private var frameRate: Double = 60
     @AppStorage("videoQuality")   private var videoQuality: Double = 1.0
     @AppStorage("saveDirectory")  private var saveDirectory: String?
     @AppStorage("hideSelf")       private var hideSelf: Bool = false
@@ -232,18 +232,12 @@ struct OptionsView: View {
                     .buttonStyle(.borderless)
                     .frame(minWidth: isMacOS12 ? 100 : 10)
                     Picker("", selection: $frameRate) {
-                        if ![240, 144, 120, 90, 60, 30, 24, 15 ,10].contains(frameRate) {
-                            Text("\(frameRate) FPS").tag(frameRate)
+                        if ![240.0, 144, 120, 90, 60, 30, 24, 15, 10, 5, 2, 1, 0.5, 0.2, 0.1, 0.05, 0.01].contains(frameRate) {
+                            Text(RecordingOptions.fpsDescription(frameRate)).tag(frameRate)
                         }
-                        Text("240 FPS").tag(240)
-                        Text("144 FPS").tag(144)
-                        Text("120 FPS").tag(120)
-                        Text("90 FPS").tag(90)
-                        Text("60 FPS").tag(60)
-                        Text("30 FPS").tag(30)
-                        Text("24 FPS").tag(24)
-                        Text("15 FPS").tag(15)
-                        Text("10 FPS").tag(10)
+                        ForEach([240.0, 144, 120, 90, 60, 30, 24, 15, 10, 5, 2, 1, 0.5, 0.2, 0.1, 0.05, 0.01], id: \.self) { fps in
+                            Text(RecordingOptions.fpsDescription(fps)).tag(fps)
+                        }
                     }
                     .buttonStyle(.borderless)
                     .frame(minWidth: isMacOS12 ? 100 : 10)
@@ -358,6 +352,12 @@ struct OptionsView: View {
                         }
                     }
                 }.padding(.trailing, isMacOS12 ? 0 : -17)
+            }
+            HStack {
+                Spacer()
+                Button("Advanced recording options…") { RecordingOptionsView.show() }
+                    .buttonStyle(.link)
+                    .disabled(SCContext.isRecordingBusy)
             }
         }
     }

@@ -1,0 +1,320 @@
+{
+  "type": "offline_synthetic_AVAssetWriter_smoke_test",
+  "not_a_benchmark": [
+    "ScreenCaptureKit",
+    "CPU",
+    "RAM",
+    "real_screen_legibility",
+    "human_speech_ASR"
+  ],
+  "host": {
+    "os": "macOS 14.8.4",
+    "architecture": "arm64"
+  },
+  "configuration": {
+    "duration_s": 16,
+    "width": 1280,
+    "height": 720,
+    "video_target_bps": 150000,
+    "audio": "AAC 24000Hz mono 32000bps target, synthetic 440Hz tone",
+    "hardware_encoder_required": true,
+    "explicit_video_sample_durations": true,
+    "endSession_at_s": 16
+  },
+  "files": [
+    {
+      "file": "/tmp/qr-lowfps-smoke/avc1-0.2.mp4",
+      "size_bytes": 57142,
+      "format_duration_s": 16.0,
+      "streams": [
+        {
+          "codec_name": "h264",
+          "duration": "16.000000",
+          "start_time": "0.000000",
+          "avg_frame_rate": "1/4",
+          "nb_frames": "4",
+          "sample_rate": null,
+          "channels": null,
+          "bit_rate": "5495",
+          "packet_count": 4
+        },
+        {
+          "codec_name": "aac",
+          "duration": "16.000000",
+          "start_time": "0.000000",
+          "avg_frame_rate": "0/0",
+          "nb_frames": "378",
+          "sample_rate": "24000",
+          "channels": 1,
+          "bit_rate": "21414",
+          "packet_count": 378,
+          "max_abs_packet_gap_s": 1.0000000012361232e-06
+        }
+      ],
+      "decoded_video_frames": [
+        {
+          "pts_time": "0.000000",
+          "duration_time": "5.000000",
+          "pict_type": "I",
+          "side_data_list": [
+            {
+              "side_data_type": "H.26[45] User Data Unregistered SEI message"
+            }
+          ]
+        },
+        {
+          "pts_time": "5.000000",
+          "duration_time": "5.000000",
+          "pict_type": "I"
+        },
+        {
+          "pts_time": "10.000000",
+          "duration_time": "5.000000",
+          "pict_type": "I"
+        },
+        {
+          "pts_time": "15.000000",
+          "duration_time": "1.000000",
+          "pict_type": "I"
+        }
+      ],
+      "decode_exit": 0,
+      "decode_stderr": "",
+      "decoded_audio_samples": 384000,
+      "decoded_audio_duration_s": 16.0
+    },
+    {
+      "file": "/tmp/qr-lowfps-smoke/avc1-0.5.mp4",
+      "size_bytes": 68812,
+      "format_duration_s": 16.0,
+      "streams": [
+        {
+          "codec_name": "h264",
+          "duration": "16.000000",
+          "start_time": "0.000000",
+          "avg_frame_rate": "1/2",
+          "nb_frames": "8",
+          "sample_rate": null,
+          "channels": null,
+          "bit_rate": "11260",
+          "packet_count": 8
+        },
+        {
+          "codec_name": "aac",
+          "duration": "16.000000",
+          "start_time": "0.000000",
+          "avg_frame_rate": "0/0",
+          "nb_frames": "378",
+          "sample_rate": "24000",
+          "channels": 1,
+          "bit_rate": "21414",
+          "packet_count": 378,
+          "max_abs_packet_gap_s": 1.0000000012361232e-06
+        }
+      ],
+      "decoded_video_frames": [
+        {
+          "pts_time": "0.000000",
+          "duration_time": "2.000000",
+          "pict_type": "I",
+          "side_data_list": [
+            {
+              "side_data_type": "H.26[45] User Data Unregistered SEI message"
+            }
+          ]
+        },
+        {
+          "pts_time": "2.000000",
+          "duration_time": "2.000000",
+          "pict_type": "I"
+        },
+        {
+          "pts_time": "4.000000",
+          "duration_time": "2.000000",
+          "pict_type": "I"
+        },
+        {
+          "pts_time": "6.000000",
+          "duration_time": "2.000000",
+          "pict_type": "I"
+        },
+        {
+          "pts_time": "8.000000",
+          "duration_time": "2.000000",
+          "pict_type": "I"
+        },
+        {
+          "pts_time": "10.000000",
+          "duration_time": "2.000000",
+          "pict_type": "I"
+        },
+        {
+          "pts_time": "12.000000",
+          "duration_time": "2.000000",
+          "pict_type": "I"
+        },
+        {
+          "pts_time": "14.000000",
+          "duration_time": "2.000000",
+          "pict_type": "I"
+        }
+      ],
+      "decode_exit": 0,
+      "decode_stderr": "",
+      "decoded_audio_samples": 384000,
+      "decoded_audio_duration_s": 16.0
+    },
+    {
+      "file": "/tmp/qr-lowfps-smoke/hvc1-0.2.mp4",
+      "size_bytes": 51279,
+      "format_duration_s": 16.0,
+      "streams": [
+        {
+          "codec_name": "hevc",
+          "duration": "16.000000",
+          "start_time": "0.000000",
+          "avg_frame_rate": "1/5",
+          "nb_frames": "4",
+          "sample_rate": null,
+          "channels": null,
+          "bit_rate": "1975",
+          "packet_count": 4
+        },
+        {
+          "codec_name": "aac",
+          "duration": "16.000000",
+          "start_time": "0.000000",
+          "avg_frame_rate": "0/0",
+          "nb_frames": "378",
+          "sample_rate": "24000",
+          "channels": 1,
+          "bit_rate": "21414",
+          "packet_count": 378,
+          "max_abs_packet_gap_s": 1.0000000012361232e-06
+        }
+      ],
+      "decoded_video_frames": [
+        {
+          "pts_time": "0.000000",
+          "duration_time": "5.000000",
+          "pict_type": "I",
+          "side_data_list": [
+            {
+              "side_data_type": "H.26[45] User Data Unregistered SEI message"
+            }
+          ]
+        },
+        {
+          "pts_time": "5.000000",
+          "duration_time": "5.000000",
+          "pict_type": "B"
+        },
+        {
+          "pts_time": "10.000000",
+          "duration_time": "5.000000",
+          "pict_type": "B"
+        },
+        {
+          "pts_time": "15.000000",
+          "duration_time": "5.000000",
+          "pict_type": "P"
+        }
+      ],
+      "decode_exit": 0,
+      "decode_stderr": "",
+      "decoded_audio_samples": 384000,
+      "decoded_audio_duration_s": 16.0
+    },
+    {
+      "file": "/tmp/qr-lowfps-smoke/hvc1-0.5.mp4",
+      "size_bytes": 54383,
+      "format_duration_s": 16.0,
+      "streams": [
+        {
+          "codec_name": "hevc",
+          "duration": "16.000000",
+          "start_time": "0.000000",
+          "avg_frame_rate": "1/2",
+          "nb_frames": "8",
+          "sample_rate": null,
+          "channels": null,
+          "bit_rate": "3931",
+          "packet_count": 8
+        },
+        {
+          "codec_name": "aac",
+          "duration": "16.000000",
+          "start_time": "0.000000",
+          "avg_frame_rate": "0/0",
+          "nb_frames": "378",
+          "sample_rate": "24000",
+          "channels": 1,
+          "bit_rate": "21414",
+          "packet_count": 378,
+          "max_abs_packet_gap_s": 1.0000000012361232e-06
+        }
+      ],
+      "decoded_video_frames": [
+        {
+          "pts_time": "0.000000",
+          "duration_time": "2.000000",
+          "pict_type": "I",
+          "side_data_list": [
+            {
+              "side_data_type": "H.26[45] User Data Unregistered SEI message"
+            }
+          ]
+        },
+        {
+          "pts_time": "2.000000",
+          "duration_time": "2.000000",
+          "pict_type": "B"
+        },
+        {
+          "pts_time": "4.000000",
+          "duration_time": "2.000000",
+          "pict_type": "B"
+        },
+        {
+          "pts_time": "6.000000",
+          "duration_time": "2.000000",
+          "pict_type": "B"
+        },
+        {
+          "pts_time": "8.000000",
+          "duration_time": "2.000000",
+          "pict_type": "P"
+        },
+        {
+          "pts_time": "10.000000",
+          "duration_time": "2.000000",
+          "pict_type": "B"
+        },
+        {
+          "pts_time": "12.000000",
+          "duration_time": "2.000000",
+          "pict_type": "B"
+        },
+        {
+          "pts_time": "14.000000",
+          "duration_time": "2.000000",
+          "pict_type": "P"
+        }
+      ],
+      "decode_exit": 0,
+      "decode_stderr": "",
+      "decoded_audio_samples": 384000,
+      "decoded_audio_duration_s": 16.0
+    }
+  ],
+  "limitations": [
+    "HEVC 0.2 fps decoded final sample duration extends to 20s while container/track trim ends at 16s; verify target playback tail.",
+    "H264 avg_frame_rate reads 1/4 due finite 4 frames over16s; actual sample intervals are5s.",
+    "AAC has priming/padding outside trimmed track; packets start negative; use track edit trim when judging continuity.",
+    "Video frames static synthetic text with changing header, not representative workload."
+  ],
+  "run_date_local": "2026-10-20",
+  "timezone": "Asia/Ho_Chi_Minh",
+  "source_commit": "e94488b",
+  "harness": "smoke.swift"
+}

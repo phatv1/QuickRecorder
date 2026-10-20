@@ -129,6 +129,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, SCStreamDelegate, SCStreamOu
     var isResizing = false
     var presenterType = "OFF"
     var frameQueue = FixedLengthArray<CMTime>(maxLength: 20)
+    private var terminationPending = false
+    private var terminationTimer: Timer?
     
     @AppStorage("showOnDock")       var showOnDock: Bool = true
     @AppStorage("showMenubar")      var showMenubar: Bool = false
@@ -155,7 +157,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SCStreamDelegate, SCStreamOu
     @AppStorage("showPreview")      var showPreview: Bool = true
     @AppStorage("background")       var background: BackgroundType = .wallpaper
     @AppStorage("showMouse")        var showMouse: Bool = true
-    @AppStorage("frameRate")        var frameRate: Int = 60
+    @AppStorage("frameRate")        var frameRate: Double = 60
     @AppStorage("videoQuality")     var videoQuality: Double = 1.0
     @AppStorage("videoFormat")      var videoFormat: VideoFormat = .mp4
     @AppStorage("audioFormat")      var audioFormat: AudioFormat = .aac
@@ -191,7 +193,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, SCStreamDelegate, SCStreamOu
     }
     
     func registerGlobalMouseMonitor() {
+        if let monitor = mouseMonitor { NSEvent.removeMonitor(monitor); mouseMonitor = nil }
+        let adaptiveCapture = RecordingOptions().adaptiveFrameRate
+        guard highlightMouse || SCContext.isMagnifierEnabled || adaptiveCapture else { return }
         mouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.scrollWheel, .mouseMoved, .rightMouseUp, .rightMouseDown, .rightMouseDragged, .leftMouseUp,  .leftMouseDown, .leftMouseDragged, .otherMouseUp, .otherMouseDown, .otherMouseDragged]) { event in
+            if adaptiveCapture { SCContext.noteRecordingActivity() }
             self.mousePointerReLocation(event: event)
             self.screenMagnifierReLocation(event: event)
         }
@@ -202,11 +208,32 @@ class AppDelegate: NSObject, NSApplicationDelegate, SCStreamDelegate, SCStreamOu
         if let monitor = mouseMonitor { NSEvent.removeMonitor(monitor); mouseMonitor = nil }
     }
     
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if terminationPending { return .terminateLater }
+        guard SCContext.isRecordingBusy else { return .terminateNow }
+        terminationPending = true
+        SCContext.stopRecording()
+        let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] currentTimer in
+            guard let self = self else { currentTimer.invalidate(); return }
+            guard !SCContext.isRecordingBusy else { return }
+            currentTimer.invalidate()
+            self.terminationTimer = nil
+            self.terminationPending = false
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        terminationTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+        return .terminateLater
+    }
+
     func applicationWillTerminate(_ aNotification: Notification) {
-        if SCContext.stream != nil { SCContext.stopRecording() }
+        terminationTimer?.invalidate()
+        terminationTimer = nil
+        if SCContext.isRecordingBusy { SCContext.stopRecording() }
     }
     
     func application(_ application: NSApplication, open urls: [URL]) {
+        guard !terminationPending else { return }
         for url in urls {
             if SCContext.trimingList.contains(url) { continue }
             createNewWindow(view: VideoTrimmerView(videoURL: url), title: url.lastPathComponent, random: true, only: false)
@@ -327,10 +354,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, SCStreamDelegate, SCStreamOu
         
         KeyboardShortcuts.onKeyDown(for: .showPanel) {
             _ = self.applicationShouldHandleReopen(NSApp, hasVisibleWindows: true)
-            if SCContext.stream == nil { NSApp.activate(ignoringOtherApps: true) }
+            if !self.terminationPending && !SCContext.isRecordingBusy { NSApp.activate(ignoringOtherApps: true) }
         }
         KeyboardShortcuts.onKeyDown(for: .saveFrame) { if SCContext.stream != nil { SCContext.saveFrame = true }}
-        KeyboardShortcuts.onKeyDown(for: .screenMagnifier) { if SCContext.stream != nil { SCContext.isMagnifierEnabled.toggle() }}
+        KeyboardShortcuts.onKeyDown(for: .screenMagnifier) {
+            if SCContext.stream != nil {
+                SCContext.isMagnifierEnabled.toggle()
+                self.registerGlobalMouseMonitor()
+            }
+        }
         KeyboardShortcuts.onKeyDown(for: .stop) { if SCContext.stream != nil { SCContext.stopRecording() }}
         KeyboardShortcuts.onKeyDown(for: .pauseResume) { if SCContext.stream != nil { SCContext.pauseRecording() }}
         KeyboardShortcuts.onKeyDown(for: .toggleMicMute) {
@@ -339,22 +371,22 @@ class AppDelegate: NSObject, NSApplicationDelegate, SCStreamDelegate, SCStreamOu
             }
         }
         KeyboardShortcuts.onKeyDown(for: .startWithAudio) {[self] in
-            if SCContext.streamType != nil { return }
+            if terminationPending || SCContext.isRecordingBusy { return }
             closeAllWindow()
             prepRecord(type: "audio", screens: SCContext.getSCDisplayWithMouse(), windows: nil, applications: nil, fastStart: true)
         }
         KeyboardShortcuts.onKeyDown(for: .startWithScreen) {[self] in
-            if SCContext.stream != nil { return }
+            if terminationPending || SCContext.isRecordingBusy { return }
             closeAllWindow()
             prepRecord(type: "display", screens: SCContext.getSCDisplayWithMouse(), windows: nil, applications: nil, fastStart: true)
         }
         KeyboardShortcuts.onKeyDown(for: .startWithArea) {[self] in
-            if SCContext.stream != nil { return }
+            if terminationPending || SCContext.isRecordingBusy { return }
             closeAllWindow()
             showAreaSelector(size: NSSize(width: 600, height: 450))
         }
         KeyboardShortcuts.onKeyDown(for: .startWithWindow) { [self] in
-            if SCContext.stream != nil { return }
+            if terminationPending || SCContext.isRecordingBusy { return }
             closeAllWindow()
             let frontmostApp = NSWorkspace.shared.frontmostApplication
             if let pid = frontmostApp?.processIdentifier {
@@ -370,6 +402,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SCStreamDelegate, SCStreamOu
         closeAllWindow()
         if showOnDock { _ = applicationShouldHandleReopen(NSApp, hasVisibleWindows: true) }
         cleanupOrphanRecordings()
+        RecordingResume.resumeIfNeeded()
         tips("Would you like to use H.265 format for better video quality and smaller file size?",
              id: "qr.switch-to-h265.note", buttonTitle: "Use H.265", switchButton: true) {
             ud.setValue(Encoder.h265.rawValue, forKey: "encoder")
@@ -392,7 +425,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SCStreamDelegate, SCStreamOu
     }
     
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if SCContext.stream == nil {
+        if !terminationPending && !SCContext.isRecordingBusy {
             let w1 = NSApp.windows.filter({ !$0.title.contains("Item-0") && !$0.title.isEmpty && $0.isVisible })
             let w2 = w1.filter({ !$0.title.contains(".qma") })
             if (!w1.isEmpty && w2.isEmpty) || w1.isEmpty {

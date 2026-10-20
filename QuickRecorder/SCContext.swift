@@ -50,7 +50,54 @@ func debugLog(_ message: String) {
 
 class SCContext {
     static var trimingList = [URL]()
-    static var firstFrame: CMSampleBuffer?
+    // Capture, timestamp normalization and every writer mutation share this queue.
+    static let mediaQueueKey = DispatchSpecificKey<Void>()
+    static let mediaQueue: DispatchQueue = {
+        let queue = DispatchQueue(label: "QuickRecorder.media", qos: .userInitiated)
+        queue.setSpecific(key: mediaQueueKey, value: ())
+        return queue
+    }()
+    static var recordingOptions = RecordingOptions()
+    static var timeline = RecordingTimeline()
+    static var acceptsMedia = false
+    static var stoppingRecording = false
+    static var startingRecording = false
+    static var recordingFailure: Error?
+    static var postProcessingCount = 0
+    static var stopCleanupDone = false
+    static var recordingOutputSize = CGSize.zero
+    static var framePolicy = RecordingFramePolicy(options: RecordingOptions())
+    static var adaptiveCapture: RecordingAdaptiveCapture?
+    static var previewThumbnail: NSImage?
+    static var lastVideoSample: CMSampleBuffer?
+    static var pendingVideoSample: CMSampleBuffer?
+    static var segmentSeedSample: CMSampleBuffer?
+    static var pendingVideoRetryScheduled = false
+    static var pendingVideoRetries = 0
+    static var stoppedAt = CMTime.zero
+    static var lastVideoTime: CMTime?
+    static var lastAudioTime: CMTime?
+    static var audioDroppedBuffers = 0
+    static var videoDroppedFrames = 0
+    static var systemConverter: RecordingAudioConverter?
+    static var microphoneConverter: RecordingAudioConverter?
+    static var liveMixer: RecordingAudioMixer?
+    static var audioPending: [CMSampleBuffer] = []
+    static var microphonePending: [CMSampleBuffer] = []
+    static var segmentManifest: RecordingManifest?
+    static var segmentBasePath = ""
+    static var segmentStart = CMTime.zero
+    static var segmentIndex = 0
+    static var segmentVideoSettings: [String: Any] = [:]
+    static var segmentFileType = AVFileType.mp4
+    static var segmentFinishes = DispatchGroup()
+    static var segmentTimer: DispatchSourceTimer?
+    static let microphoneGate = DispatchSemaphore(value: 64)
+    static var aecNextPTS: CMTime?
+    static let aecTimestampLock = NSLock()
+    static let droppedAudioLock = NSLock()
+    static var microphoneEnqueueDrops = 0
+    static var firstFrame: CMSampleBuffer? // Legacy preview call sites; no capture surface is retained here.
     static var autoStop = 0
     static var recordCam = ""
     static var recordDevice = ""
@@ -219,29 +266,49 @@ class SCContext {
         return ud.string(forKey: "saveDirectory")! + (capture ? "/Capturing at ".local : "/Recording at ".local) + dateFormatter.string(from: Date())
     }
     
-    static func updateAudioSettings(format: String = ud.string(forKey: "audioFormat") ?? "", rate: Int = 48000) -> [String : Any] {
-        var audioSettings: [String : Any] = [AVSampleRateKey : rate, AVNumberOfChannelsKey : 2] // reset audioSettings
-        var bitRate = ud.integer(forKey: "audioQuality") * 1000
-        if rate < 44100 { bitRate = min(64000, bitRate / 2) }
+    static func updateAudioSettings(format: String = ud.string(forKey: "audioFormat") ?? "", rate: Int? = nil) -> [String : Any] {
+        let options = recordingOptions
+        var audioSettings: [String: Any] = [AVSampleRateKey: rate ?? options.audioSampleRate,
+            AVNumberOfChannelsKey: options.audioChannels]
         switch format {
-        case AudioFormat.mp3.rawValue: fallthrough
-        case AudioFormat.aac.rawValue:
+        case AudioFormat.mp3.rawValue, AudioFormat.aac.rawValue:
             audioSettings[AVFormatIDKey] = kAudioFormatMPEG4AAC
-            audioSettings[AVEncoderBitRateKey] = bitRate
         case AudioFormat.alac.rawValue:
             audioSettings[AVFormatIDKey] = kAudioFormatAppleLossless
             audioSettings[AVEncoderBitDepthHintKey] = 16
-        case AudioFormat.flac.rawValue:
-            audioSettings[AVFormatIDKey] = kAudioFormatFLAC
+        case AudioFormat.flac.rawValue: audioSettings[AVFormatIDKey] = kAudioFormatFLAC
         case AudioFormat.opus.rawValue:
             audioSettings[AVFormatIDKey] = ud.string(forKey: "videoFormat") != VideoFormat.mp4.rawValue ? kAudioFormatOpus : kAudioFormatMPEG4AAC
-            audioSettings[AVEncoderBitRateKey] =  bitRate
-        default:
-            assertionFailure("unknown audio format while setting audio settings: ".local + (ud.string(forKey: "audioFormat") ?? "[no defaults]".local))
+        default: audioSettings[AVFormatIDKey] = kAudioFormatMPEG4AAC
+        }
+        if let codec = audioSettings[AVFormatIDKey] as? AudioFormatID,
+           codec == kAudioFormatMPEG4AAC || codec == kAudioFormatOpus {
+            audioSettings[AVEncoderBitRateKey] = options.audioBitrateKbps * 1000
+            switch options.audioBitrateMode {
+            case "constant": audioSettings[AVEncoderBitRateStrategyKey] = AVAudioBitRateStrategy_Constant
+            case "variable": audioSettings[AVEncoderBitRateStrategyKey] = AVAudioBitRateStrategy_VariableConstrained
+            default: audioSettings[AVEncoderBitRateStrategyKey] = AVAudioBitRateStrategy_LongTermAverage
+            }
         }
         return audioSettings
     }
-    
+
+    static func onMediaQueue<T>(_ body: () throws -> T) rethrows -> T {
+        if DispatchQueue.getSpecific(key: mediaQueueKey) != nil { return try body() }
+        return try mediaQueue.sync(execute: body)
+    }
+
+    static func noteRecordingActivity() {
+        mediaQueue.async { if recordingOptions.adaptiveFrameRate { framePolicy.noteActivity(); adaptiveCapture?.refresh() } }
+    }
+
+    static func normalizedSample(_ sample: CMSampleBuffer) -> CMSampleBuffer? {
+        let offset = CMTimeAdd(timeline.origin, timeline.pauseOffset)
+        guard let result = recordingRetimedSample(sample, offset: offset),
+              result.presentationTimeStamp.isNumeric, result.presentationTimeStamp >= .zero else { return nil }
+        return result
+    }
+
     static func getBackgroundColor() -> CGColor {
         guard let color = ud.string(forKey: "background") else { return CGColor.black  }
         if color == BackgroundType.wallpaper.rawValue { return CGColor.black }
@@ -354,92 +421,149 @@ class SCContext {
     }
     
     static func pauseRecording() {
-        isPaused.toggle()
+        onMediaQueue {
+            guard acceptsMedia else { return }
+            let now = CMClockGetTime(CMClockGetHostTimeClock())
+            isPaused.toggle()
+            if isPaused { timeline.pause(at: now) }
+            else { timeline.resume(at: now); framePolicy.reset() }
+            timeOffset = timeline.pauseOffset
+            timePassed = timeline.elapsed(at: now).seconds
+            startTime = Date.now.addingTimeInterval(-timePassed)
+        }
         PopoverState.shared.isPaused = isPaused
-        if !isPaused {
-            isResume = true
-            startTime = Date.now.addingTimeInterval(-1) - SCContext.timePassed
+    }
+
+    static var isRecordingBusy: Bool {
+        onMediaQueue { stream != nil || startingRecording || stoppingRecording || acceptsMedia }
+    }
+
+    static func reserveRecordingStart() -> Bool {
+        onMediaQueue {
+            guard stream == nil, !startingRecording, !stoppingRecording, !acceptsMedia else { return false }
+            startingRecording = true
+            return true
         }
     }
-    
+
+    static func finishRecordingStart(succeeded: Bool) {
+        onMediaQueue {
+            startingRecording = false
+            if !succeeded && stream == nil && !stoppingRecording {
+                streamType = nil
+                screen = nil
+                window = nil
+                application = nil
+                audioFile = nil
+            }
+        }
+    }
+
+    static var needsPostRecordingAudioMix: Bool {
+        ud.bool(forKey: "recordMic") && ud.bool(forKey: "recordWinSound") && ud.bool(forKey: "remuxAudio")
+            && !recordingOptions.mixAudioLive && recordingOptions.segmentDurationSeconds == 0
+    }
+
     static func stopRecording() {
-        debugLog("stopRecording: streamType=\(String(describing: streamType)), sessionStarted=\(sessionStarted)")
+        let shouldStop = onMediaQueue { () -> Bool in
+            guard !stoppingRecording, stream != nil || acceptsMedia else { return false }
+            stoppingRecording = true
+            stopCleanupDone = false
+            stoppedAt = timeline.elapsed(at: CMClockGetTime(CMClockGetHostTimeClock()))
+            acceptsMedia = false
+            adaptiveCapture?.invalidate()
+            adaptiveCapture = nil
+            segmentTimer?.cancel()
+            segmentTimer = nil
+            return true
+        }
+        guard shouldStop else { return }
+        RecordingResume.clear()
         if ud.bool(forKey: "preventSleep") { SleepPreventer.shared.allowSleep() }
+        let capturedStream = stream
+        stream = nil
+        Task {
+            if let capturedStream {
+                do { try await capturedStream.stopCapture() }
+                catch { debugLog("stopCapture: \(error)") }
+            }
+            // Producers are stopped before the serial queue is drained and inputs close.
+            if ud.bool(forKey: "recordMic") {
+                AudioRecorder.shared.stop()
+                audioEngine.inputNode.removeTap(onBus: 0)
+                audioEngine.stop()
+                if ud.bool(forKey: "enableAEC") { try? AECEngine.stopAudioUnit() }
+            }
+            mediaQueue.async {
+                if let mixer = liveMixer {
+                    for sample in mixer.finish() { routeAudio(sample, microphone: false) }
+                }
+                finishMediaWriter(at: stoppedAt, attempts: 50)
+            }
+        }
+    }
+
+    private static func finishMediaWriter(at end: CMTime, attempts: Int) {
+        drainAudioQueues()
+        guard sessionStarted, let writer = vW, writer.status == .writing else {
+            segmentFinishes.notify(queue: .main) { completeStoppedRecording() }
+            return
+        }
+        let videoSamples = terminalVideoSamples(at: end, includePending: true)
+        var audio: [RecordingWriterFinalizer.AudioTrack] = []
+        if let input = awInput { audio.append(.init(input: input, samples: audioPending)) }
+        if let input = micInput { audio.append(.init(input: input, samples: microphonePending)) }
+        audioPending.removeAll(); microphonePending.removeAll(); pendingVideoSample = nil; segmentSeedSample = nil
+        let path = filePath ?? ""
+        let begin = segmentStart
+        RecordingWriterFinalizer.finish(writer: writer, video: vwInput, videoSamples: videoSamples,
+            audio: audio, end: CMTimeMaximum(.zero, end - begin), on: mediaQueue) { result in
+            switch result {
+            case .success: recordCompletedSegment(path: path, start: begin, end: end)
+            case .failure(let error): recordingFailure = error; debugLog("Finalizing failed: \(error)")
+            }
+            segmentFinishes.notify(queue: .main) { completeStoppedRecording() }
+        }
+    }
+
+    private static func completeStoppedRecording() {
+        debugLog("Recording finalized: dropped video=\(videoDroppedFrames), audio=\(audioDroppedBuffers + microphoneEnqueueDrops), policySkipped=\(framePolicy.skippedFrames)")
+        if let writer = vW, writer.status == .failed {
+            showNotification(title: "Failed to save file".local, body: writer.error?.localizedDescription ?? "Unknown writer error", id: "quickrecorder.writer.error")
+        }
+        if let failure = recordingFailure {
+            showNotification(title: "Recording Incomplete", body: failure.localizedDescription, id: "quickrecorder.incomplete")
+        }
+        if needsPostRecordingAudioMix && streamType != .systemaudio && recordingFailure == nil {
+            let thumbnail = previewThumbnail
+            let wantsPreview = ud.bool(forKey: "showPreview")
+            postProcessingCount += 1
+            mixAudioTracks(videoURL: filePath.url) { result in
+                DispatchQueue.main.async {
+                    defer { finishPostProcessing() }
+                    switch result {
+                    case .success(let url):
+                        if wantsPreview { showPreview(path: url.path, image: thumbnail) }
+                        else { showNotification(title: "Recording Completed".local, body: url.path, id: "quickrecorder.completed") }
+                    case .failure(let error):
+                        debugLog("Audio mixing failed: \(error)")
+                        showNotification(title: "Failed to save file".local, body: error.localizedDescription, id: "quickrecorder.mix.error")
+                    }
+                }
+            }
+        }
+
         autoStop = 0
         lastPTS = nil
         recordCam = ""
         recordDevice = ""
         isMagnifierEnabled = false
         isMicMuted = false
-        DispatchQueue.main.async {
-            PopoverState.shared.isMicMuted = false
-        }
+        PopoverState.shared.isMicMuted = false
         mousePointer.orderOut(nil)
         screenMagnifier.orderOut(nil)
         AppDelegate.shared.stopGlobalMouseMonitor()
-
-        if let w = NSApp.windows.first(where:  { $0.title == "Area Overlayer".local }) { w.close() }
-        
-        if stream != nil { stream.stopCapture() }
-        stream = nil
-        if ud.bool(forKey: "recordMic") {
-            micInput.markAsFinished()
-            AudioRecorder.shared.stop()
-            audioEngine.inputNode.removeTap(onBus: 0)
-            audioEngine.stop()
-            //DispatchQueue.global().async { try? audioEngine.inputNode.setVoiceProcessingEnabled(false) }
-            if ud.bool(forKey: "enableAEC") { try? AECEngine.stopAudioUnit() }
-        }
-        if streamType != .systemaudio {
-            // Check if session was ever started - if not, show notification
-            if !sessionStarted {
-                showNotification(
-                    title: "Recording Cancelled".local,
-                    body: "Recording stopped before any frames were captured.".local,
-                    id: "quickrecorder.cancelled.\(UUID().uuidString)"
-                )
-            }
-            if vW != nil {
-                // Session was started, proceed with finishWriting
-                let dispatchGroup = DispatchGroup()
-                dispatchGroup.enter()
-                vwInput.markAsFinished()
-                if #available(macOS 13, *) { awInput.markAsFinished() }
-                vW.finishWriting {
-                    if vW.status != .completed {
-                        print("Video writing failed with status: \(vW.status), error: \(String(describing: vW.error))")
-                        let err = vW.error?.localizedDescription ?? "Unknow Error"
-                        showNotification(title: "Failed to save file".local, body: "\(err)", id: "quickrecorder.error.\(UUID().uuidString)")
-                    } else {
-                        if ud.bool(forKey: "recordMic") && ud.bool(forKey: "recordWinSound") && ud.bool(forKey: "remuxAudio") {
-                            mixAudioTracks(videoURL: filePath.url) { result in
-                                switch result {
-                                case .success(let url):
-                                    print("Exported video to \(String(describing: url.path))")
-                                    if !ud.bool(forKey: "showPreview") {
-                                        showNotification(title: "Recording Completed".local, body: String(format: "File saved to: %@".local, url.path), id: "quickrecorder.completed.\(UUID().uuidString)")
-                                    }
-                                    DispatchQueue.main.async {
-                                        if ud.bool(forKey: "trimAfterRecord") {
-                                            AppDelegate.shared.createNewWindow(view: VideoTrimmerView(videoURL: url), title: url.lastPathComponent, only: false)
-                                        } else {
-                                            showPreview(path: url.path)
-                                        }
-                                    }
-                                case .failure(let error):
-                                    print("Failed to export video: \(error.localizedDescription)")
-                                }
-                            }
-                        }
-                    }
-                    dispatchGroup.leave()
-                }
-                dispatchGroup.wait()
-            }
-        } else {
-            if ud.bool(forKey: "recordMic") { vW.finishWriting {} }
-        }
-        
+        if let window = NSApp.windows.first(where: { $0.title == "Area Overlayer".local }) { window.close() }
         DispatchQueue.main.async {
             controlPanel.close()
             if isCameraRunning() {
@@ -454,11 +578,14 @@ class SCContext {
         audioFile2 = nil // close audio file2
         if streamType == .systemaudio {
             if ud.string(forKey: "audioFormat") == AudioFormat.mp3.rawValue && !ud.bool(forKey: "recordMic") {
+                let sourceAudioURL = filePath1.url
+                let outPutUrl = (String(filePath.dropLast(4)) + ".mp3").url
+                postProcessingCount += 1
                 Task {
-                    let outPutUrl = (String(filePath.dropLast(4)) + ".mp3").url
+                    defer { DispatchQueue.main.async { finishPostProcessing() } }
                     do {
-                        try await m4a2mp3(inputUrl: filePath1.url, outputUrl: outPutUrl)
-                        try? fd.removeItem(atPath: filePath1)
+                        try await m4a2mp3(inputUrl: sourceAudioURL, outputUrl: outPutUrl)
+                        try? fd.removeItem(at: sourceAudioURL)
                         if !ud.bool(forKey: "showPreview") {
                             let title = "Recording Completed".local
                             let body = String(format: "File saved to: %@".local, outPutUrl.path.removingPercentEncoding!)
@@ -483,7 +610,8 @@ class SCContext {
                         let exportMP3 = document.info.exportMP3
                         let format = exportMP3 ? "mp3" : document.info.format
                         let saveURL = fileURL.deletingPathExtension().appendingPathExtension(format)
-                        audioPlayerManager.saveFile(saveURL, saveAsMP3: exportMP3)
+                        postProcessingCount += 1
+                        audioPlayerManager.saveFile(saveURL, saveAsMP3: exportMP3) { finishPostProcessing() }
                     }
                 } else {
                     if !ud.bool(forKey: "showPreview") {
@@ -506,14 +634,16 @@ class SCContext {
         AppDelegate.shared.presenterType = "OFF"
         updateStatusBar()
         
-        if !(ud.bool(forKey: "recordMic") && ud.bool(forKey: "recordWinSound") && ud.bool(forKey: "remuxAudio")) && streamType != .systemaudio {
+        if !needsPostRecordingAudioMix && streamType != .systemaudio {
             if let vW = vW {
                 if vW.status != .completed {
                     streamType = nil
+                    stopCleanupDone = true
+                    finishStopIfReady()
                     return
                 }
             }
-            if !ud.bool(forKey: "showPreview") {
+            if recordingFailure == nil && !ud.bool(forKey: "showPreview") {
                 let title = "Recording Completed".local
                 let body = String(format: "File saved to: %@".local, filePath)
                 let id = "quickrecorder.completed.\(UUID().uuidString)"
@@ -526,14 +656,31 @@ class SCContext {
         
         streamType = nil
         firstFrame = nil
+        lastVideoSample = nil
+        pendingVideoSample = nil
+        segmentSeedSample = nil
+        systemConverter = nil
+        microphoneConverter = nil
+        liveMixer = nil
         sessionStarted = false
+        stopCleanupDone = true
+        finishStopIfReady()
+    }
+
+    static func finishPostProcessing() {
+        postProcessingCount = max(0, postProcessingCount - 1)
+        finishStopIfReady()
+    }
+
+    private static func finishStopIfReady() {
+        if stopCleanupDone && postProcessingCount == 0 { onMediaQueue { stoppingRecording = false } }
     }
     
     static func showPreview(path: String, image: NSImage? = nil) {
         if !ud.bool(forKey: "showPreview") { return }
         var previewImage: NSImage?
         let previewURL = fd.temporaryDirectory.appendingPathComponent("qr-preview.jpg")
-        if image == nil { firstFrame?.nsImage?.saveToFile(previewURL, type: .jpeg) }
+        if image == nil { previewThumbnail?.saveToFile(previewURL, type: .jpeg) }
         
         if let i = image { previewImage = i } else { previewImage = NSImage(contentsOf: previewURL) }
         if let previewImage = previewImage, let screen = getScreenWithMouse() {
@@ -755,22 +902,9 @@ class SCContext {
     }
     
     static func adjustTime(sample: CMSampleBuffer, by offset: CMTime) -> CMSampleBuffer? {
-        guard CMSampleBufferGetFormatDescription(sample) != nil else { return nil }
-        
-        var timingInfo = [CMSampleTimingInfo](repeating: CMSampleTimingInfo(), count: Int(CMSampleBufferGetNumSamples(sample)))
-        CMSampleBufferGetSampleTimingInfoArray(sample, entryCount: timingInfo.count, arrayToFill: &timingInfo, entriesNeededOut: nil)
-        
-        for i in 0..<timingInfo.count {
-            timingInfo[i].decodeTimeStamp = CMTimeSubtract(timingInfo[i].decodeTimeStamp, offset)
-            timingInfo[i].presentationTimeStamp = CMTimeSubtract(timingInfo[i].presentationTimeStamp, offset)
-        }
-        
-        var outSampleBuffer: CMSampleBuffer?
-        CMSampleBufferCreateCopyWithNewTiming(allocator: nil, sampleBuffer: sample, sampleTimingEntryCount: timingInfo.count, sampleTimingArray: &timingInfo, sampleBufferOut: &outSampleBuffer)
-        
-        return outSampleBuffer
+        recordingRetimedSample(sample, offset: offset)
     }
-    
+
     static func showNotification(title: String, body: String, id: String) {
         let content = UNMutableNotificationContent()
         content.title = title
@@ -791,7 +925,7 @@ class SCContext {
         let outputURL = audioOutputURL.deletingPathExtension()
         let audioOnlyComposition = AVMutableComposition()
         
-        let fileEnding = ud.string(forKey: "videoFormat") ?? ""
+        let fileEnding = videoURL.pathExtension.lowercased()
         var fileType: AVFileType?
         switch fileEnding {
         case VideoFormat.mov.rawValue: fileType = AVFileType.mov
@@ -888,7 +1022,7 @@ class SCContext {
                     switch exportSession.status {
                     case .completed:
                         let  fileManager = fd
-                        try? fileManager.removeItem(atPath: filePath)
+                        try? fileManager.removeItem(atPath: videoURL.path)
                         try? fileManager.removeItem(atPath: audioOutputURL.path)
                         completion(.success(outputURL))
                     case .failed:
@@ -924,7 +1058,7 @@ class SCContext {
                 memset(floatChannelData[channel], 0, Int(frameLength) * MemoryLayout<Float>.size)
             }
         }
-        return silentBuffer.asSampleBuffer
+        return silentBuffer.recordingSampleBuffer(at: buffer.presentationTimeStamp)
     }
 
     // Helper: Create a silent CMSampleBuffer with the same format and frame count as the input AVAudioPCMBuffer
@@ -939,5 +1073,291 @@ class SCContext {
             }
         }
         return silentBuffer.asSampleBuffer
+    }
+}
+
+extension SCContext {
+    static func createVideoWriter(path: String) throws {
+        let writer = try AVAssetWriter(outputURL: URL(fileURLWithPath: path), fileType: segmentFileType)
+        guard writer.canApply(outputSettings: segmentVideoSettings, forMediaType: .video) else {
+            throw NSError(domain: "QuickRecorder.Encoding", code: 1, userInfo: [NSLocalizedDescriptionKey: "The selected video encoder settings are unsupported."])
+        }
+        let video = AVAssetWriterInput(mediaType: .video, outputSettings: segmentVideoSettings)
+        video.expectsMediaDataInRealTime = true
+        guard writer.canAdd(video) else { throw NSError(domain: "QuickRecorder.Encoding", code: 2) }
+        writer.add(video)
+        var system: AVAssetWriterInput?
+        var microphone: AVAssetWriterInput?
+        if ud.bool(forKey: "recordWinSound") || liveMixer != nil {
+            let settings = updateAudioSettings(format: liveMixer == nil ? (ud.string(forKey: "audioFormat") ?? "aac") : "aac")
+            guard writer.canApply(outputSettings: settings, forMediaType: .audio) else { throw NSError(domain: "QuickRecorder.Audio", code: 1, userInfo: [NSLocalizedDescriptionKey: "The selected audio format, sample rate or bitrate is unsupported in this container."]) }
+            let input = AVAssetWriterInput(mediaType: .audio, outputSettings: settings)
+            input.expectsMediaDataInRealTime = true
+            guard writer.canAdd(input) else { throw NSError(domain: "QuickRecorder.Audio", code: 2) }
+            writer.add(input)
+            system = input
+        }
+        if ud.bool(forKey: "recordMic") && liveMixer == nil {
+            let settings = updateAudioSettings()
+            guard writer.canApply(outputSettings: settings, forMediaType: .audio) else { throw NSError(domain: "QuickRecorder.Audio", code: 3, userInfo: [NSLocalizedDescriptionKey: "The selected microphone output settings are unsupported."]) }
+            let input = AVAssetWriterInput(mediaType: .audio, outputSettings: settings)
+            input.expectsMediaDataInRealTime = true
+            guard writer.canAdd(input) else { throw NSError(domain: "QuickRecorder.Audio", code: 4) }
+            writer.add(input)
+            microphone = input
+        }
+        // Fork: crash protection for every SDR writer, including audio. The v1.7.4 audio stall
+        // came from inputs going idle at a fragment boundary; this pipeline queues audio and
+        // the record() timer appends a heartbeat frame during static screens so fragments
+        // keep closing. HDR stays off (-16341). See docs/FORK.md.
+        if !ud.bool(forKey: "recordHDR") {
+            writer.movieFragmentInterval = CMTime(seconds: recordingFragmentSeconds, preferredTimescale: 1000)
+        }
+        guard writer.startWriting() else { throw writer.error ?? NSError(domain: "QuickRecorder.Writer", code: 1) }
+        writer.startSession(atSourceTime: .zero)
+        vW = writer
+        vwInput = video
+        awInput = system
+        micInput = microphone
+        sessionStarted = true
+    }
+
+    static func enqueueMicrophonePCM(_ pcm: AVAudioPCMBuffer, at capturedTime: CMTime?) {
+        let duration = CMTime(value: Int64(pcm.frameLength), timescale: CMTimeScale(pcm.format.sampleRate))
+        let time: CMTime
+        if let capturedTime { time = capturedTime }
+        else {
+            aecTimestampLock.lock()
+            time = aecNextPTS ?? CMTimeSubtract(CMClockGetTime(CMClockGetHostTimeClock()), duration)
+            aecNextPTS = CMTimeAdd(time, duration)
+            aecTimestampLock.unlock()
+        }
+        guard microphoneGate.wait(timeout: .now()) == .success else {
+            droppedAudioLock.lock(); microphoneEnqueueDrops += 1; droppedAudioLock.unlock()
+            return
+        }
+        guard let captured = pcm.recordingSampleBuffer(at: time) else { microphoneGate.signal(); return }
+        mediaQueue.async {
+            defer { microphoneGate.signal() }
+            consumeAudio(captured, source: .microphone)
+        }
+    }
+
+    static func consumeAudio(_ captured: CMSampleBuffer, source: RecordingAudioMixer.Source) {
+        guard acceptsMedia, !isPaused, let sample = normalizedSample(captured) else { return }
+        let converter = source == .system ? systemConverter : microphoneConverter
+        guard let pcm = converter?.convert(sample, muted: source == .microphone && isMicMuted) else {
+            audioDroppedBuffers += 1
+            return
+        }
+        let pts = sample.presentationTimeStamp
+        if streamType == .systemaudio && source == .system {
+            do { try audioFile?.write(from: pcm) }
+            catch { debugLog("System audio write failed: \(error)") }
+            return
+        }
+        if let liveMixer {
+            for mixed in liveMixer.append(pcm, at: pts, source: source) { routeAudio(mixed, microphone: false) }
+        } else if let output = pcm.recordingSampleBuffer(at: pts) {
+            routeAudio(output, microphone: source == .microphone)
+        }
+        drainAudioQueues()
+    }
+
+    /// Splits PCM at segment boundaries, keeping the sample clock continuous.
+    static func routeAudio(_ original: CMSampleBuffer, microphone: Bool) {
+        var sample = original
+        if segmentManifest != nil {
+            let boundary = CMTimeAdd(segmentStart, CMTime(seconds: recordingOptions.segmentDurationSeconds, preferredTimescale: 600000))
+            let start = sample.presentationTimeStamp
+            let rate = sample.formatDescription?.audioStreamBasicDescription?.mSampleRate ?? Double(recordingOptions.audioSampleRate)
+            let end = CMTimeAdd(start, CMTime(value: Int64(sample.numSamples), timescale: CMTimeScale(rate)))
+            if start >= boundary {
+                rotateSegment(at: start)
+            } else if end > boundary {
+                let before = max(0, min(sample.numSamples, Int(((boundary - start).seconds * rate).rounded())))
+                if before > 0, let first = recordingAudioSlice(sample, offset: 0, count: before) { enqueueAudio(first, microphone: microphone) }
+                drainAudioQueues()
+                let actualBoundary = CMTimeAdd(start, CMTime(value: Int64(before), timescale: CMTimeScale(rate)))
+                rotateSegment(at: actualBoundary)
+                guard before < sample.numSamples, let rest = recordingAudioSlice(sample, offset: before, count: sample.numSamples - before) else { return }
+                sample = rest
+            }
+        }
+        enqueueAudio(sample, microphone: microphone)
+    }
+
+
+    private static func enqueueAudio(_ sample: CMSampleBuffer, microphone: Bool) {
+        let offset = streamType == .systemaudio ? CMTime.zero : segmentStart
+        guard let local = recordingRetimedSample(sample, offset: offset), local.presentationTimeStamp >= .zero else { audioDroppedBuffers += 1; return }
+        if microphone {
+            if microphonePending.count >= 64 { microphonePending.removeFirst(); audioDroppedBuffers += 1 }
+            microphonePending.append(local)
+        } else {
+            if audioPending.count >= 64 { audioPending.removeFirst(); audioDroppedBuffers += 1 }
+            audioPending.append(local)
+        }
+        lastAudioTime = CMTimeAdd(sample.presentationTimeStamp, sample.duration)
+    }
+
+    static func drainAudioQueues() {
+        if let writer = vW, writer.status == .failed {
+            recordingFailure = writer.error ?? NSError(domain: "QuickRecorder.Writer", code: 11)
+            acceptsMedia = false
+            DispatchQueue.main.async { stopRecording() }
+            return
+        }
+        flushPendingVideo()
+        while !audioPending.isEmpty, let input = awInput, input.isReadyForMoreMediaData {
+            let sample = audioPending.removeFirst()
+            if !input.append(sample) { audioDroppedBuffers += 1; debugLog("System audio append failed: \(String(describing: vW?.error))") }
+        }
+        while !microphonePending.isEmpty, let input = micInput, input.isReadyForMoreMediaData {
+            let sample = microphonePending.removeFirst()
+            if !input.append(sample) { audioDroppedBuffers += 1; debugLog("Microphone append failed: \(String(describing: vW?.error))") }
+        }
+    }
+
+    /// Re-appends the last frame when the screen has been static, so a fragmented writer
+    /// can close its fragment (a kill during a long video gap otherwise loses the whole file).
+    static func appendVideoHeartbeat(at now: CMTime) {
+        guard vW?.movieFragmentInterval.isValid == true, pendingVideoSample == nil, segmentSeedSample == nil,
+              let last = lastVideoSample, let lastTime = lastVideoTime,
+              now - lastTime >= CMTime(seconds: recordingFragmentSeconds, preferredTimescale: 600000),
+              let frame = recordingRetimedSample(last, offset: last.presentationTimeStamp - now) else { return }
+        consumeVideo(frame)
+    }
+
+    static func consumeVideo(_ sample: CMSampleBuffer) {
+        let pts = sample.presentationTimeStamp
+        if segmentManifest != nil && awInput == nil && micInput == nil && pts - segmentStart >= CMTime(seconds: recordingOptions.segmentDurationSeconds, preferredTimescale: 600000) {
+            rotateSegment(at: pts)
+        }
+        guard lastVideoTime == nil || pts > lastVideoTime! else { return }
+        if pendingVideoSample != nil { videoDroppedFrames += 1 }
+        pendingVideoSample = sample
+        flushPendingVideo()
+    }
+
+    static func flushPendingVideo() {
+        guard let sample = segmentSeedSample ?? pendingVideoSample, let input = vwInput, vW?.status == .writing else { return }
+        let isSeed = segmentSeedSample != nil
+        if !isSeed, acceptsMedia, segmentManifest != nil, awInput != nil || micInput != nil,
+           sample.presentationTimeStamp >= segmentStart + CMTime(seconds: recordingOptions.segmentDurationSeconds, preferredTimescale: 600000) { return }
+        guard input.isReadyForMoreMediaData else {
+            if !pendingVideoRetryScheduled && acceptsMedia {
+                pendingVideoRetryScheduled = true
+                mediaQueue.asyncAfter(deadline: .now() + 0.02) {
+                    pendingVideoRetryScheduled = false
+                    guard acceptsMedia else { return }
+                    pendingVideoRetries += 1
+                    if pendingVideoRetries > 100 {
+                        debugLog("Video writer remained blocked for 2 seconds; stopping")
+                        DispatchQueue.main.async { stopRecording() }
+                    } else { flushPendingVideo() }
+                }
+            }
+            return
+        }
+        pendingVideoRetries = 0
+        let pts = sample.presentationTimeStamp
+        guard let local = recordingRetimedSample(sample, offset: segmentStart) else { return }
+        guard input.append(local) else {
+            debugLog("Video append failed: \(String(describing: vW?.error))")
+            acceptsMedia = false
+            DispatchQueue.main.async { stopRecording() }
+            return
+        }
+        if isSeed { segmentSeedSample = nil } else { pendingVideoSample = nil }
+        lastVideoTime = pts
+        lastPTS = pts
+        // Exactly one latest frame is retained for terminal/segment stills; each new
+        // frame releases its predecessor. Copying every 60-fps frame would add bandwidth.
+        lastVideoSample = sample
+        if previewThumbnail == nil, let pixel = sample.imageBuffer {
+            let image = CIImage(cvPixelBuffer: pixel)
+            let scale = min(1, 480 / image.extent.width)
+            let resized = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+            if let cg = CIContext().createCGImage(resized, from: resized.extent) { previewThumbnail = NSImage(cgImage: cg, size: .zero) }
+        }
+        if isSeed { flushPendingVideo() }
+    }
+
+    static func terminalVideoSamples(at globalTime: CMTime, includePending: Bool) -> [CMSampleBuffer] {
+        var samples: [CMSampleBuffer] = []
+        let pending = includePending ? pendingVideoSample : nil
+        let seed = includePending ? segmentSeedSample : nil
+        for candidate in [seed, pending].compactMap({ $0 }) {
+            if candidate.presentationTimeStamp >= segmentStart, candidate.presentationTimeStamp < globalTime,
+               let local = recordingRetimedSample(candidate, offset: segmentStart) { samples.append(local) }
+        }
+        guard let sample = pending ?? seed ?? lastVideoSample else { return samples }
+        let previous = pending?.presentationTimeStamp ?? seed?.presentationTimeStamp ?? lastVideoTime ?? segmentStart
+        let target = CMTimeMaximum(segmentStart, globalTime - recordingTerminalFrameLead)
+        if target > previous,
+           let terminal = recordingRetimedSample(sample, offset: sample.presentationTimeStamp - (target - segmentStart)) { samples.append(terminal) }
+        return samples
+    }
+
+    static func rotateSegment(at boundary: CMTime) {
+        guard segmentManifest != nil, let old = vW, old.status == .writing, boundary > segmentStart else { return }
+        drainAudioQueues()
+        let path = filePath ?? ""
+        let oldStart = segmentStart
+        let oldVideo = vwInput
+        let terminal = terminalVideoSamples(at: boundary, includePending: false)
+        var audio: [RecordingWriterFinalizer.AudioTrack] = []
+        if let input = awInput { audio.append(.init(input: input, samples: audioPending)) }
+        if let input = micInput { audio.append(.init(input: input, samples: microphonePending)) }
+        audioPending.removeAll(); microphonePending.removeAll()
+        segmentFinishes.enter()
+        RecordingWriterFinalizer.finish(writer: old, video: oldVideo, videoSamples: terminal,
+            audio: audio, end: boundary - oldStart, on: mediaQueue) { result in
+            switch result {
+            case .success: recordCompletedSegment(path: path, start: oldStart, end: boundary)
+            case .failure(let error):
+                recordingFailure = error
+                debugLog("Segment finalizing failed: \(error)")
+                DispatchQueue.main.async { stopRecording() }
+            }
+            segmentFinishes.leave()
+        }
+        // A failed new-writer creation must never leave the closing writer active.
+        vW = nil; vwInput = nil; awInput = nil; micInput = nil
+        segmentStart = boundary
+        segmentIndex += 1
+        let ending = segmentFileType == .mov ? "mov" : "mp4"
+        filePath = String(format: "%@-%04d.%@", segmentBasePath, segmentIndex + 1, ending)
+        do {
+            try createVideoWriter(path: filePath)
+            if let held = lastVideoSample,
+               let seeded = recordingRetimedSample(held, offset: held.presentationTimeStamp - boundary) {
+                // The initial still is subject to the same retry path as captured video.
+                segmentSeedSample = seeded
+                lastVideoTime = nil
+                flushPendingVideo()
+            }
+        } catch {
+            acceptsMedia = false
+            recordingFailure = error
+            debugLog("Segment rotation failed: \(error)")
+            DispatchQueue.main.async { stopRecording() }
+        }
+    }
+
+    static func recordCompletedSegment(path: String, start: CMTime? = nil, end: CMTime) {
+        guard var manifest = segmentManifest else { return }
+        let begin = start ?? segmentStart
+        manifest.segments.append(RecordingSegment(file: URL(fileURLWithPath: path).lastPathComponent,
+            startSeconds: begin.seconds, durationSeconds: max(0, (end - begin).seconds)))
+        manifest.segments.sort { $0.startSeconds < $1.startSeconds }
+        segmentManifest = manifest
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            encoder.dateEncodingStrategy = .iso8601
+            try encoder.encode(manifest).write(to: URL(fileURLWithPath: segmentBasePath + ".recording.json"), options: .atomic)
+        } catch { debugLog("Manifest write failed: \(error)") }
     }
 }

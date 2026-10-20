@@ -11,7 +11,7 @@ import ScreenCaptureKit
 
 class selectScreen: NSScriptCommand {
     override func performDefaultImplementation() -> Any? {
-        if SCContext.stream != nil {
+        if SCContext.isRecordingBusy {
             createAlert(title: "Error".local, message: "Already recording!".local, button1: "OK".local).runModal()
             return nil
         }
@@ -43,7 +43,7 @@ class selectScreen: NSScriptCommand {
 
 class selectArea: NSScriptCommand {
     override func performDefaultImplementation() -> Any? {
-        if SCContext.stream != nil {
+        if SCContext.isRecordingBusy {
             createAlert(title: "Error".local, message: "Already recording!".local, button1: "OK".local).runModal()
             return nil
         }
@@ -70,7 +70,7 @@ class selectArea: NSScriptCommand {
 
 class selectApps: NSScriptCommand {
     override func performDefaultImplementation() -> Any? {
-        if SCContext.stream != nil {
+        if SCContext.isRecordingBusy {
             createAlert(title: "Error".local, message: "Already recording!".local, button1: "OK".local).runModal()
             return nil
         }
@@ -121,7 +121,7 @@ class selectApps: NSScriptCommand {
 
 class selectWindows: NSScriptCommand {
     override func performDefaultImplementation() -> Any? {
-        if SCContext.stream != nil {
+        if SCContext.isRecordingBusy {
             createAlert(title: "Error".local, message: "Already recording!".local, button1: "OK".local).runModal()
             return nil
         }
@@ -179,7 +179,7 @@ class selectWindows: NSScriptCommand {
 
 class recordAudio: NSScriptCommand {
     override func performDefaultImplementation() -> Any? {
-        if SCContext.stream != nil {
+        if SCContext.isRecordingBusy {
             createAlert(title: "Error".local, message: "Already recording!".local, button1: "OK".local).runModal()
             return nil
         }
@@ -200,33 +200,64 @@ class recordAudio: NSScriptCommand {
 
 class setPreferences: NSScriptCommand {
     override func performDefaultImplementation() -> Any? {
-        if SCContext.stream != nil {
-            createAlert(title: "Error".local, message: "Already recording!".local, button1: "OK".local).runModal()
+        if SCContext.isRecordingBusy {
+            scriptErrorNumber = -2700
+            scriptErrorString = "Recording settings cannot change while recording or finalizing."
             return nil
         }
-        if let hires = self.evaluatedArguments!["hires"] as? Bool { UserDefaults.standard.set(hires, forKey: "highRes") }
-        if let fps = self.evaluatedArguments!["fps"] as? Int { UserDefaults.standard.set(fps, forKey: "frameRate") }
-        if let cursor = self.evaluatedArguments!["cursor"] as? Bool { UserDefaults.standard.set(cursor, forKey: "showMouse") }
-        if let sound = self.evaluatedArguments!["sound"] as? Bool { UserDefaults.standard.set(sound, forKey: "recordWinSound") }
-        if let microphone = self.evaluatedArguments!["microphone"] as? Bool { UserDefaults.standard.set(microphone, forKey: "recordMic") }
-        if let quality = self.evaluatedArguments!["quality"] as? Int {
-            if [1,2,3].contains(quality) {
-                switch quality {
-                    case 1: UserDefaults.standard.set(0.3, forKey: "videoQuality")
-                    case 2: UserDefaults.standard.set(0.7, forKey: "videoQuality")
-                    default: UserDefaults.standard.set(1.0, forKey: "videoQuality")
+        let arguments = evaluatedArguments ?? [:]
+        do {
+            var settings: [String: Any] = [:]
+            if let name = arguments["profile"] as? String {
+                guard let profile = try RecordingOptions.profiles().first(where: { $0.name == name }),
+                      let snapshot = try PropertyListSerialization.propertyList(from: profile.settingsData, options: [], format: nil) as? [String: Any] else {
+                    throw RecordingOptionsError.profile("Recording profile not found: \(name)")
                 }
+                settings.merge(snapshot.filter { RecordingOptions.profileSettingKeys.contains($0.key) }) { _, new in new }
             }
-        }
-        if let micname = self.evaluatedArguments!["micname"] as? String {
-            if SCContext.getMicrophone().map({$0.localizedName}).contains(micname) || micname == "default" {
-                UserDefaults.standard.set(micname, forKey: "micDevice")
+            if let name = arguments["preset"] as? String {
+                guard let preset = RecordingPreset(rawValue: name) else {
+                    throw RecordingOptionsError.profile("Unknown preset. Choose \(RecordingPreset.allCases.map(\.rawValue).joined(separator: ", ")).")
+                }
+                settings.merge(preset.settings) { _, new in new }
             }
-        }
-        if let hdr = self.evaluatedArguments!["hdr"] as? Bool {
-            if #available(macOS 15.0, *) {
-                UserDefaults.standard.set(hdr, forKey: "recordHDR")
+            for key in RecordingOptions.profileSettingKeys {
+                if let value = arguments[key] { settings[key] = value }
             }
+            if let hires = arguments["hires"] as? Bool { settings["highRes"] = hires ? 2 : 1 }
+            if let fps = arguments["fps"] as? NSNumber { settings["frameRate"] = fps.doubleValue }
+            if let cursor = arguments["cursor"] as? Bool { settings["showMouse"] = cursor }
+            if let sound = arguments["sound"] as? Bool { settings["recordWinSound"] = sound }
+            if let microphone = arguments["microphone"] as? Bool { settings["recordMic"] = microphone }
+            if let quality = arguments["quality"] as? Int {
+                guard (1...3).contains(quality) else { throw RecordingOptionsError.invalid(["Quality must be 1, 2 or 3."]) }
+                settings["videoQuality"] = quality == 1 ? 0.3 : (quality == 2 ? 0.7 : 1.0)
+            }
+            if let micname = arguments["micname"] as? String {
+                guard SCContext.getMicrophone().map({ $0.localizedName }).contains(micname) || micname == "default" else {
+                    throw RecordingOptionsError.invalid(["Microphone not found: \(micname)"])
+                }
+                settings["micDevice"] = micname
+            }
+            if let hdr = arguments["hdr"] as? Bool {
+                if #available(macOS 15.0, *) { settings["recordHDR"] = hdr }
+                else if hdr { throw RecordingOptionsError.invalid(["HDR requires macOS 15 or later."]) }
+            }
+            let saveName = (arguments["saveProfile"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let deleteName = arguments["deleteProfile"] as? String
+            let saved = try RecordingOptions.profiles()
+            if let name = saveName {
+                guard !name.isEmpty else { throw RecordingOptionsError.profile("Enter a profile name.") }
+                guard !saved.contains(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) else { throw RecordingOptionsError.profile("A profile with that name already exists.") }
+            }
+            let deletion = deleteName.flatMap { name in saved.first(where: { $0.name == name }) }
+            if let name = deleteName, deletion == nil { throw RecordingOptionsError.profile("Recording profile not found: \(name)") }
+            try RecordingOptions.apply(settings)
+            if let name = saveName { try RecordingOptions.saveProfile(name: name) }
+            if let profile = deletion { try RecordingOptions.deleteProfile(id: profile.id) }
+        } catch {
+            scriptErrorNumber = -2700
+            scriptErrorString = error.localizedDescription
         }
         return nil
     }

@@ -42,7 +42,7 @@
             <parameter name="hires" code="REsl" type="boolean" description="Recording in Retina resolution" optional="yes">
                 <cocoa key="hires"/>
             </parameter>
-            <parameter name="fps" code="FPss" type="integer" description="Set the recording frame rate" optional="yes">
+            <parameter name="fps" code="FPss" type="real" description="Frame rate from 0.01 to 240 FPS; audio remains continuous" optional="yes">
                 <cocoa key="fps"/>
             </parameter>
             <parameter name="quality" code="QLty" type="integer" description="Video quality (3=high, 2=medium, 1=low)" optional="yes">
@@ -62,6 +62,129 @@
             </parameter>
             <parameter name="hdr" code="HDri" type="boolean" description="Whether to record in HDR mode (macOS 15 or later only)" optional="yes">
                 <cocoa key="hdr"/>
+            </parameter>
+            <parameter name="preset" code="R001" type="text" description="Preset: original, minimal144p, minimal240p, observation, balanced, detail, remoteWatch" optional="yes">
+                <cocoa key="preset"/>
+            </parameter>
+            <parameter name="profile" code="R002" type="text" description="Load a saved recording profile by name before applying overrides" optional="yes">
+                <cocoa key="profile"/>
+            </parameter>
+            <parameter name="save profile" code="R003" type="text" description="Save the resulting settings as a new named profile" optional="yes">
+                <cocoa key="saveProfile"/>
+            </parameter>
+            <parameter name="delete profile" code="R004" type="text" description="Delete a saved recording profile by name" optional="yes">
+                <cocoa key="deleteProfile"/>
+            </parameter>
+            <parameter name="container" code="R005" type="text" description="Video container: mp4 or mov" optional="yes">
+                <cocoa key="videoFormat"/>
+            </parameter>
+            <parameter name="encoder" code="R006" type="text" description="Video codec: h264 or h265; validated on the recording machine" optional="yes">
+                <cocoa key="encoder"/>
+            </parameter>
+            <parameter name="audio codec" code="R007" type="text" description="Audio codec; AAC is the portable MP4 choice" optional="yes">
+                <cocoa key="audioFormat"/>
+            </parameter>
+            <parameter name="resolution mode" code="R008" type="text" description="source, height, longEdge, scale or custom" optional="yes">
+                <cocoa key="resolutionMode"/>
+            </parameter>
+            <parameter name="output width" code="R009" type="integer" description="Custom canvas width in pixels" optional="yes">
+                <cocoa key="outputWidth"/>
+            </parameter>
+            <parameter name="output height" code="R010" type="integer" description="Custom canvas height in pixels" optional="yes">
+                <cocoa key="outputHeight"/>
+            </parameter>
+            <parameter name="target height" code="R011" type="integer" description="Output height in height mode" optional="yes">
+                <cocoa key="targetHeight"/>
+            </parameter>
+            <parameter name="maximum long edge" code="R012" type="integer" description="Maximum output long edge in pixels" optional="yes">
+                <cocoa key="maxLongEdge"/>
+            </parameter>
+            <parameter name="resolution scale" code="R013" type="real" description="Output scale relative to the capture source" optional="yes">
+                <cocoa key="resolutionScale"/>
+            </parameter>
+            <parameter name="scaling mode" code="R014" type="text" description="fit, fill or stretch" optional="yes">
+                <cocoa key="scalingMode"/>
+            </parameter>
+            <parameter name="allow upscaling" code="R015" type="boolean" description="Allow captured content to be enlarged" optional="yes">
+                <cocoa key="allowUpscaling"/>
+            </parameter>
+            <parameter name="rate control" code="R016" type="text" description="automatic, bitrate, quality (estimated bitrate) or budget" optional="yes">
+                <cocoa key="rateControl"/>
+            </parameter>
+            <parameter name="video bitrate" code="R017" type="real" description="Target video bitrate in kbps, not a hard size guarantee" optional="yes">
+                <cocoa key="videoBitrateKbps"/>
+            </parameter>
+            <parameter name="encoder quality" code="R018" type="real" description="Estimated video quality from 0 to 1; not CRF" optional="yes">
+                <cocoa key="encoderQuality"/>
+            </parameter>
+            <parameter name="peak video bitrate" code="R019" type="real" description="Peak video bitrate in kbps; 0 means no extra limit" optional="yes">
+                <cocoa key="peakBitrateKbps"/>
+            </parameter>
+            <parameter name="storage budget" code="R020" type="real" description="Target total MB per hour including enabled audio" optional="yes">
+                <cocoa key="storageBudgetMBPerHour"/>
+            </parameter>
+            <parameter name="audio sample rate" code="R021" type="integer" description="Audio capture rate: 8000, 16000, 24000 or 48000 Hz" optional="yes">
+                <cocoa key="audioSampleRate"/>
+            </parameter>
+            <parameter name="audio channels" code="R022" type="integer" description="1 for mono or 2 for stereo" optional="yes">
+                <cocoa key="audioChannels"/>
+            </parameter>
+            <parameter name="audio bitrate" code="R023" type="integer" description="Target kbps per encoded audio track" optional="yes">
+                <cocoa key="audioBitrateKbps"/>
+            </parameter>
+            <parameter name="audio bitrate mode" code="R024" type="text" description="average, variable or constant, subject to encoder support" optional="yes">
+                <cocoa key="audioBitrateMode"/>
+            </parameter>
+            <parameter name="mix audio live" code="R025" type="boolean" description="Mix system and microphone audio before encoding" optional="yes">
+                <cocoa key="mixAudioLive"/>
+            </parameter>
+            <parameter name="require hardware" code="R026" type="boolean" description="Reject recordings without a compatible hardware encoder" optional="yes">
+                <cocoa key="requireHardware"/>
+            </parameter>
+            <parameter name="capture pixel format" code="R027" type="text" description="automatic, bgra or nv12 (8-bit SDR)" optional="yes">
+                <cocoa key="capturePixelFormat"/>
+            </parameter>
+            <parameter name="capture queue depth" code="R028" type="integer" description="Capture queue depth from 3 to 8" optional="yes">
+                <cocoa key="captureQueueDepth"/>
+            </parameter>
+            <parameter name="skip duplicates" code="R029" type="boolean" description="Skip unchanged video frames while retaining timestamps" optional="yes">
+                <cocoa key="dropDuplicateFrames"/>
+            </parameter>
+            <parameter name="adaptive frame rate" code="R030" type="boolean" description="Adapt capture cadence to visual changes and mouse activity" optional="yes">
+                <cocoa key="adaptiveFrameRate"/>
+            </parameter>
+            <parameter name="idle fps" code="R031" type="real" description="Adaptive idle FPS from 0.01 to 240" optional="yes">
+                <cocoa key="adaptiveIdleFPS"/>
+            </parameter>
+            <parameter name="active fps" code="R032" type="real" description="Adaptive active FPS from 0.01 to 240" optional="yes">
+                <cocoa key="adaptiveActiveFPS"/>
+            </parameter>
+            <parameter name="idle delay" code="R033" type="real" description="Seconds before switching to idle cadence" optional="yes">
+                <cocoa key="adaptiveIdleSeconds"/>
+            </parameter>
+            <parameter name="keyframe interval" code="R034" type="real" description="Maximum seconds between keyframes; 0 is automatic" optional="yes">
+                <cocoa key="keyFrameIntervalSeconds"/>
+            </parameter>
+            <parameter name="frame reordering" code="R035" type="text" description="automatic, enabled or disabled" optional="yes">
+                <cocoa key="frameReordering"/>
+            </parameter>
+            <parameter name="segment duration" code="R036" type="real" description="Seconds per segment; 0 keeps a single file" optional="yes">
+                <cocoa key="segmentDurationSeconds"/>
+            </parameter>
+            <parameter name="grayscale" code="R037" type="boolean" description="Convert video to grayscale" optional="yes">
+                <cocoa key="grayscale"/>
+            </parameter>
+            <parameter name="encoder priority" code="R038" type="text" description="balanced or speed" optional="yes">
+                <cocoa key="encoderPriority"/>
+            </parameter>
+            <parameter name="alpha channel" code="R039" type="boolean" description="Alpha requires HEVC with MOV" optional="yes">
+                <cocoa key="withAlpha"/>
+            </parameter>
+            <parameter name="echo cancellation" code="R040" type="boolean" description="Enable microphone acoustic echo cancellation" optional="yes">
+                <cocoa key="enableAEC"/>
+            </parameter>
+            <parameter name="mix after recording" code="R041" type="boolean" description="Mix separate audio tracks after recording if live mixing is off" optional="yes">
+                <cocoa key="remuxAudio"/>
             </parameter>
         </command>
     </suite>

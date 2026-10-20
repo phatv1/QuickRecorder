@@ -133,6 +133,10 @@ struct VideoTrimmerView: View {
                     .offset(y: 0.5)
                 Text(videoURL.lastPathComponent)
                     .font(.system(size: 13, weight: .bold))
+                Spacer()
+                Button("Compress…") {
+                    VideoCompressionView.show(sourceURL: videoURL)
+                }.help("Export a compressed copy of this file; keeps the original.")
             }
             ZStack {
                 RecorderPlayerView(playerView: playerViewModel.playerView)

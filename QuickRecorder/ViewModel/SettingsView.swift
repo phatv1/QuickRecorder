@@ -13,6 +13,7 @@ import MatrixColorSelector
 
 struct SettingsView: View {
     @State private var selectedItem: String? = "General"
+    @State private var recording = SCContext.isRecordingBusy
     
     var body: some View {
         NavigationView {
@@ -20,22 +21,29 @@ struct SettingsView: View {
                 NavigationLink(destination: GeneralView(), tag: "General", selection: $selectedItem) {
                     Label("General", image: "gear")
                 }
-                NavigationLink(destination: RecorderView(), tag: "Recorder", selection: $selectedItem) {
+                NavigationLink(destination: RecorderView().disabled(recording), tag: "Recorder", selection: $selectedItem) {
                     Label("Recorder", image: "record")
                 }
-                NavigationLink(destination: OutputView(), tag: "Output", selection: $selectedItem) {
+                NavigationLink(destination: OutputView().disabled(recording), tag: "Output", selection: $selectedItem) {
                     Label("Output", image: "film")
+                }
+                NavigationLink(destination: AdvancedRecordingSettingsLink(), tag: "Advanced", selection: $selectedItem) {
+                    Label("Advanced", systemImage: "slider.horizontal.3")
                 }
                 NavigationLink(destination: HotkeyView(), tag: "Hotkey", selection: $selectedItem) {
                     Label("Hotkey", image: "hotkey")
                 }
-                NavigationLink(destination: BlocklistView(), tag: "Blaoklist", selection: $selectedItem) {
+                NavigationLink(destination: BlocklistView().disabled(recording), tag: "Blaoklist", selection: $selectedItem) {
                     Label("Blocklist", image: "blacklist")
                 }
             }
             .listStyle(.sidebar)
             .padding(.top, 9)
         }.frame(width: 600, height: 512)
+            .onReceive(updateTimer) { _ in
+                let busy = SCContext.isRecordingBusy
+                if recording != busy { recording = busy }
+            }
     }
 }
 
@@ -160,6 +168,7 @@ struct OutputView: View {
     @AppStorage("videoFormat")      private var videoFormat: VideoFormat = .mp4
     @AppStorage("audioFormat")      private var audioFormat: AudioFormat = .aac
     @AppStorage("audioQuality")     private var audioQuality: AudioQuality = .high
+    @AppStorage("audioBitrateKbps")  private var audioBitrateKbps: Int = 256
     @AppStorage("pixelFormat")      private var pixelFormat: PixFormat = .delault
     @AppStorage("background")       private var background: BackgroundType = .wallpaper
     @AppStorage("remuxAudio")       private var remuxAudio: Bool = true
@@ -171,14 +180,17 @@ struct OutputView: View {
     var body: some View {
         SForm(spacing: 30) {
             SGroupBox(label: "Audio") {
-                SPicker("Quality", selection: $audioQuality) {
+                SPicker("Quality", selection: audioBitrateSelection) {
                     if audioFormat == .alac || audioFormat == .flac {
-                        Text("Lossless").tag(audioQuality)
+                        Text("Lossless").tag(audioBitrateSelection.wrappedValue)
                     }
-                    Text("Normal - 128Kbps").tag(AudioQuality.normal)
-                    Text("Good - 192Kbps").tag(AudioQuality.good)
-                    Text("High - 256Kbps").tag(AudioQuality.high)
-                    Text("Extreme - 320Kbps").tag(AudioQuality.extreme)
+                    if ![128, 192, 256, 320].contains(audioBitrateSelection.wrappedValue) {
+                        Text("Custom - \(audioBitrateSelection.wrappedValue) Kbps (Advanced)").tag(audioBitrateSelection.wrappedValue)
+                    }
+                    Text("Normal - 128Kbps").tag(128)
+                    Text("Good - 192Kbps").tag(192)
+                    Text("High - 256Kbps").tag(256)
+                    Text("Extreme - 320Kbps").tag(320)
                 }.disabled(audioFormat == .alac || audioFormat == .flac)
                 SDivider()
                 SPicker("Format", selection: $audioFormat) {
@@ -233,6 +245,15 @@ struct OutputView: View {
                 if background == .clear { background = .wallpaper }
             }
         }
+    }
+
+    private var audioBitrateSelection: Binding<Int> {
+        Binding(get: {
+            ud.object(forKey: "audioBitrateKbps") == nil ? audioQuality.rawValue : audioBitrateKbps
+        }, set: { value in
+            audioBitrateKbps = value
+            if let quality = AudioQuality(rawValue: value) { audioQuality = quality }
+        })
     }
     
     func updateOutputDirectory() { // todo: re-sandbox

@@ -1,0 +1,47 @@
+{
+  "pins" : [
+    {
+      "identity" : "aecaudiostream",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/lihaoyun6/AECAudioStream.git",
+      "state" : {
+        "revision" : "0eab971c1dd0420ee84646c71172dd66fa59117c"
+      }
+    },
+    {
+      "identity" : "keyboardshortcuts",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/sindresorhus/KeyboardShortcuts.git",
+      "state" : {
+        "revision" : "045cf174010beb335fa1d2567d18c057b8787165",
+        "version" : "2.3.0"
+      }
+    },
+    {
+      "identity" : "matrixcolorselector",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/lihaoyun6/MatrixColorSelector.git",
+      "state" : {
+        "revision" : "0853e68c0c9b205ffe6a963f2a56b26e6ceca51a"
+      }
+    },
+    {
+      "identity" : "sparkle",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/sparkle-project/Sparkle",
+      "state" : {
+        "revision" : "eef1a539a373c1f1a320624b1130fc5de7b2e100",
+        "version" : "2.10.0"
+      }
+    },
+    {
+      "identity" : "swiftlame",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/hidden-spectrum/SwiftLAME.git",
+      "state" : {
+        "revision" : "45d1b021c2bd2bbd38b9669934c0584cda0d1b6b"
+      }
+    }
+  ],
+  "version" : 2
+}

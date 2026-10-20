@@ -111,6 +111,14 @@ struct PreviewView: View {
             }
             Button("共享...") { showSharingServicePicker(for: filePath.url) }
             Divider()
+            if ["mp4", "mov", "m4v"].contains(filePath.pathExtension.lowercased()) {
+                Button("Compress Video…") {
+                    if fd.fileExists(atPath: filePath) {
+                        VideoCompressionView.show(sourceURL: filePath.url)
+                    }
+                    closeWindow()
+                }
+            }
             if !trimAfterRecord {
                 Button("Trim") {
                     if fd.fileExists(atPath: filePath) {

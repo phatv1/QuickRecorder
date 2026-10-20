@@ -202,6 +202,9 @@ QuickRecorder 需要多項系統權限：
 
 ### Fragmented MP4 保護（v1.7.4 後縮小範圍）
 
+> **Fork：** 此 fork 對所有 SDR writer（含音訊）啟用 2 秒 fragment，並以影片 heartbeat 讓 fragment
+> 持續關閉。已於 2026-10-20 驗證；見 `docs/FORK.md` →「Crash protection」。以下內容描述的是 upstream。
+
 `RecordEngine.swift` 只在 **`recordMic` 與 `recordWinSound` 都關閉，且 `recordHDR == false`** 時，
 才在主要 `AVAssetWriter` 啟用 `movieFragmentInterval = 1.0s`，也就是沒有音訊的純螢幕錄影
 （判斷位於 `initVideo`）。此模式下 moov atom 每秒寫入一次，App 被強制結束或當機時，
