@@ -37,6 +37,14 @@
             </parameter>
         </command>
         
+        <command name="pick target" code="QKrdPKtg" description="Open the panel; the next target started is saved as the default instead of recorded">
+            <cocoa class="QuickRecorder.pickTarget"/>
+        </command>
+
+        <command name="record default" code="QKrdRDdf" description="Record the saved default target (the main display if none)">
+            <cocoa class="QuickRecorder.recordDefault"/>
+        </command>
+
         <command name="configure" code="QKrdSEtt" description="Modify recording settings">
             <cocoa class="QuickRecorder.setPreferences"/>
             <parameter name="hires" code="REsl" type="boolean" description="Recording in Retina resolution" optional="yes">

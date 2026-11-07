@@ -217,10 +217,10 @@ struct WinSelector: View {
                         startRecording()
                     }, label: {
                         VStack{
-                            Image(systemName: "record.circle.fill")
+                            Image(systemName: DefaultTarget.picking ? "checkmark.circle.fill" : "record.circle.fill") // fork
                                 .font(.system(size: 36))
-                                .foregroundStyle(.red)
-                            Text("Start")
+                                .foregroundStyle(DefaultTarget.picking ? .green : .red)
+                            Text(LocalizedStringKey(DefaultTarget.picking ? "OK" : "Start")) // fork: pick mode saves, never records
                                 .foregroundStyle(.secondary)
                                 .font(.system(size: 12))
                         }

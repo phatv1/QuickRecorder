@@ -15,6 +15,7 @@ import AECAudioStream
 
 extension AppDelegate {
     @objc func prepRecord(type: String, screens: SCDisplay?, windows: [SCWindow]?, applications: [SCRunningApplication]?, fastStart: Bool = false) {
+        if DefaultTarget.picking { return DefaultTarget.save(type: type, display: screens, windows: windows, apps: applications) } // fork
         guard SCContext.reserveRecordingStart() else {
             SCContext.showNotification(title: "Recording Busy", body: "Wait for the current recording to finish saving before starting another.", id: "quickrecorder.busy")
             return
